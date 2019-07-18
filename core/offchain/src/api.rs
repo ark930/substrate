@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::{str::FromStr, sync::Arc, convert::TryFrom};
+use std::{str::FromStr, sync::Arc, convert::{TryFrom, TryInto}};
+use std::time::SystemTime;
 use client::backend::OffchainStorage;
 use crate::AuthorityKeyProvider;
 use futures::{Stream, Future, sync::mpsc};
@@ -212,7 +213,19 @@ impl<Storage, KeyProvider> OffchainExt for Api<Storage, KeyProvider> where
 	}
 
 	fn timestamp(&mut self) -> Timestamp {
-		unavailable_yet("timestamp")
+		let now = SystemTime::now();
+		let epoch_duration = now.duration_since(SystemTime::UNIX_EPOCH);
+		match epoch_duration {
+			Err(_) => {
+				warn!("Current time is earlier than UNIX_EPOCH.");
+				Timestamp::from_unix_millis(0)
+				},
+			Ok(d) => {
+				let duration = d.as_millis();
+				// Assuming overflow won't happen for a few hundred years.
+				Timestamp::from_unix_millis(duration.try_into().unwrap())
+			}
+		}
 	}
 
 	fn sleep_until(&mut self, _deadline: Timestamp) {
@@ -473,6 +486,22 @@ mod tests {
 
 		let mock = Arc::new(MockNetworkStateInfo());
 		AsyncApi::new(pool, db, "pass".to_owned().into(), TestProvider::default(), BlockId::Number(0), mock)
+	}
+
+	#[test]
+	fn should_get_timestamp() {
+		let mut api = offchain_api().0;
+		
+		// Get timestamp from std.
+		let now = SystemTime::now();
+		let d: u64 = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis().try_into().unwrap();
+
+		// Get timestamp from offchain api.
+		let timestamp = api.timestamp();
+		
+		// Compare.
+		assert_eq!(timestamp.unix_millis() > 0, true);
+		assert_eq!(timestamp.unix_millis(), d);
 	}
 
 	#[test]
